@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#0f172a" />
+  <title>OpsMin — Cerrito Car</title>
+  <link rel="stylesheet" href="styles.css" />
+
+  <!-- Supabase JS desde CDN -->
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+</head>
+<body>
+
+<!-- LOGIN -->
+<div id="screen-login" class="screen">
+  <div class="login-box">
+    <div class="login-logo">Ops<span>Min</span></div>
+    <p class="login-sub">Cerrito Car · Sistema de talleres</p>
+    <div id="login-form">
+      <input id="login-email" type="email" placeholder="tu@email.com" autocomplete="email" />
+      <button id="login-btn" onclick="sendMagicLink()">Enviar acceso</button>
+      <p id="login-msg" class="login-msg hidden"></p>
+    </div>
+  </div>
+</div>
+
+<!-- APP PRINCIPAL -->
+<div id="screen-app" class="screen hidden">
+
+  <!-- TOPBAR -->
+  <div class="topbar">
+    <div class="topbar-left">
+      <span class="logo">Ops<span>Min</span></span>
+      <div class="nav-tabs">
+        <button class="nav-tab active" onclick="showView('board')">Tablero</button>
+        <button class="nav-tab" onclick="showView('listado')">Listado del día</button>
+      </div>
+    </div>
+    <div class="topbar-right">
+      <div id="connection-badge" class="conn-badge conn-ok">● En línea</div>
+      <button class="btn-upload" onclick="showView('upload')">↑ Subir Excel</button>
+      <button class="btn-logout" onclick="logout()">Salir</button>
+    </div>
+  </div>
+
+  <!-- SEARCH BAR -->
+  <div class="search-bar" id="search-bar">
+    <input
+      id="search-input"
+      type="search"
+      placeholder="Buscar por interno, cliente o chasis..."
+      oninput="onSearch(this.value)"
+      autocomplete="off"
+    />
+    <div id="search-results" class="search-results hidden"></div>
+  </div>
+
+  <!-- VISTAS -->
+  <div id="view-board"   class="view"><!-- board.js --></div>
+  <div id="view-upload"  class="view hidden"><!-- upload.js --></div>
+  <div id="view-listado" class="view hidden"><!-- listado.js --></div>
+
+</div>
+
+<!-- PANEL LATERAL (detalle de vehículo) -->
+<div id="side-panel" class="side-panel hidden">
+  <div class="panel-header">
+    <div>
+      <div id="panel-title" class="panel-title"></div>
+      <div id="panel-sub"   class="panel-sub"></div>
+    </div>
+    <button class="panel-close" onclick="closePanel()">✕</button>
+  </div>
+  <div class="panel-tabs">
+    <button class="ptab active" onclick="switchPanelTab('trabajo',this)">Trabajo</button>
+    <button class="ptab"        onclick="switchPanelTab('datos',this)">Vehículo</button>
+    <button class="ptab"        onclick="switchPanelTab('comentarios',this)">Comentarios</button>
+  </div>
+  <div id="panel-body" class="panel-body"></div>
+</div>
+
+<!-- OVERLAY -->
+<div id="overlay" class="overlay hidden" onclick="closePanel()"></div>
+
+<!-- TOAST -->
+<div id="toast" class="toast hidden"></div>
+
+<!-- Scripts -->
+<script src="config.js"></script>
+<script src="supabase.js"></script>
+<script src="auth.js"></script>
+<script src="board.js"></script>
+<script src="upload.js"></script>
+<script src="search.js"></script>
+<script src="listado.js"></script>
+<script src="app.js"></script>
+
+</body>
+</html>
