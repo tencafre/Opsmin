@@ -5,3 +5,15 @@ account_id = "b3eb85885921c0b48f53f057ab4d54e0"
 
 [triggers]
 crons = ["0 12 */3 * *"]
+# ...
+[observability.logs]
+enabled = true
+head_sampling_rate = 1
+invocation_logs = true
+persist = true
+
+[observability.traces]
+enabled = true
+head_sampling_rate = 1
+persist = true
+# ...
