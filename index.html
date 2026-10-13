@@ -87,14 +87,15 @@
 <div id="toast" class="toast hidden"></div>
 
 <!-- Scripts -->
+<!-- Scripts — orden definitivo -->
 <script src="config.js"></script>
 <script src="supabase.js"></script>
-<script src="app.js"></script>
-<script src="auth.js"></script>
-<script src="board.js"></script>
-<script src="upload.js"></script>
-<script src="search.js"></script>
-<script src="listado.js"></script>
+<script src="board.js"></script>      <!-- define loadBoard, renderBoard -->
+<script src="upload.js"></script>     <!-- define renderUpload, uploadFile -->
+<script src="search.js"></script>     <!-- define onSearch -->
+<script src="listado.js"></script>    <!-- define renderListado -->
+<script src="app.js"></script>        <!-- usa todas las anteriores -->
+<script src="auth.js"></script>       <!-- usa showScreen de app.js -->
 
 
 </body>
