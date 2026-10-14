@@ -12,17 +12,32 @@ async function hashBuffer(buffer) {
 }
 
 async function upsertVehicles(vehicles, supabaseUrl, serviceKey) {
+  const clean = vehicles.map(v => ({
+    chasis:      v.chasis,
+    interno:     v.interno     ?? null,
+    modelo:      v.modelo,
+    version:     v.version     ?? null,
+    color:       v.color       ?? null,
+    nro_fabrica: v.nro_fabrica ?? null,
+    cliente:     v.cliente     ?? null,
+    vendedor:    v.vendedor    ?? null,
+    dias_stock:  v.dias_stock  ?? 0,
+    ubicacion:   v.ubicacion   ?? null,
+    estado:      'activo',
+  }));
+
   const res = await fetch(
     `${supabaseUrl}/rest/v1/vehicles`,
     {
       method:  'POST',
       headers: {
-        'apikey':        serviceKey,
-        'Authorization': `Bearer ${serviceKey}`,
-        'Content-Type':  'application/json',
-        'Prefer':        'resolution=merge-duplicates,return=minimal',
+        'apikey':         serviceKey,
+        'Authorization':  `Bearer ${serviceKey}`,
+        'Content-Type':   'application/json',
+        'Prefer':         'resolution=merge-duplicates,return=minimal',
+        'on-conflict':    'chasis',
       },
-      body: JSON.stringify(vehicles),
+      body: JSON.stringify(clean),
     }
   );
 
