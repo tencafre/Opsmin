@@ -26,24 +26,31 @@ async function upsertVehicles(vehicles, supabaseUrl, serviceKey) {
     estado:      'activo',
   }));
 
-  const res = await fetch(
-    `${supabaseUrl}/rest/v1/vehicles`,
-    {
-      method:  'POST',
-      headers: {
-        'apikey':         serviceKey,
-        'Authorization':  `Bearer ${serviceKey}`,
-        'Content-Type':   'application/json',
-        'Prefer':         'resolution=merge-duplicates,return=minimal',
-        'on-conflict':    'chasis',
-      },
-      body: JSON.stringify(clean),
-    }
-  );
+  // Enviar en lotes de 20 para evitar timeouts
+  const BATCH = 20;
+  for (let i = 0; i < clean.length; i += BATCH) {
+    const lote = clean.slice(i, i + BATCH);
 
-  if (!res.ok) {
-    const err = await res.text();
-    throw new Error(`Error en upsert: ${err}`);
+    const res = await fetch(
+      `${supabaseUrl}/rest/v1/vehicles?on_conflict=chasis`,
+      {
+        method:  'POST',
+        headers: {
+          'apikey':        serviceKey,
+          'Authorization': `Bearer ${serviceKey}`,
+          'Content-Type':  'application/json',
+          'Prefer':        'resolution=merge-duplicates,return=minimal',
+        },
+        body: JSON.stringify(lote),
+      }
+    );
+
+    if (!res.ok) {
+      const err = await res.text();
+      throw new Error(`Error en upsert lote ${i}-${i+BATCH}: ${err}`);
+    }
+
+    console.log(`[upsert] Lote ${i+1}-${Math.min(i+BATCH, clean.length)} OK`);
   }
 }
 
