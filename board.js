@@ -1,26 +1,15 @@
 // ---- TABLERO KANBAN ----
 
-let sectors  = [];
-let vehicles = [];
+let sectors     = [];
+let vehicles    = [];
 let assignments = [];
+let diasLavado  = new Map();
+let taskCatalog = [];
 
-// Mapa vehicleId → días desde lavado
-let diasLavado = new Map();
-
-
-
+// ---- CARGA DE DATOS ----
 async function loadBoard() {
   try {
-    // Primero obtener el ID del sector lavado
-    const { data: sectorLavado } = await db
-      .from('sectors')
-      .select('id')
-      .eq('slug', 'lavado')
-      .single();
-
-    const lavadoId = sectorLavado?.id ?? null;
-
-    // Queries paralelas
+    // 1. Sectores, vehículos y asignaciones activas
     const [secRes, vehRes, asnRes] = await Promise.all([
       db.from('sectors').select('*').order('orden'),
       db.from('vehicles').select('*').eq('estado', 'activo').order('interno'),
@@ -31,13 +20,16 @@ async function loadBoard() {
     if (vehRes.error) throw vehRes.error;
     if (asnRes.error) throw asnRes.error;
 
-    sectors     = secRes.data;
-    vehicles    = vehRes.data;
-    assignments = asnRes.data;
+    sectors     = secRes.data ?? [];
+    vehicles    = vehRes.data ?? [];
+    assignments = asnRes.data ?? [];
 
-    // Calcular días desde último lavado
+    // 2. ID del sector lavado
+    const sectorLavado = sectors.find(s => s.slug === 'lavado');
+    const lavadoId     = sectorLavado?.id ?? null;
+
+    // 3. Historial de lavados (asignaciones pasadas en sector lavado)
     diasLavado = new Map();
-
     if (lavadoId) {
       const { data: lavados, error: lavErr } = await db
         .from('sector_assignments')
@@ -71,17 +63,23 @@ async function loadBoard() {
   }
 }
 
+async function loadTaskCatalog() {
+  const { data, error } = await db
+    .from('sector_task_catalog')
+    .select('*')
+    .eq('activo', true)
+    .order('orden');
+  if (!error) taskCatalog = data ?? [];
+}
+
+// ---- RENDER TABLERO ----
 function renderBoard() {
   const container = document.getElementById('view-board');
+  if (!container) return;
 
-  // Mapa vehicleId → assignment activo
   const asnByVehicle = new Map(assignments.map(a => [a.vehicle_id, a]));
-
-  // Mapa sectorId → vehículos
-  const bySector = new Map(sectors.map(s => [s.id, []]));
-
-  // Sin sector asignado
-  const sinSector = [];
+  const bySector     = new Map(sectors.map(s => [s.id, []]));
+  const sinSector    = [];
 
   for (const v of vehicles) {
     const asn = asnByVehicle.get(v.id);
@@ -98,12 +96,10 @@ function renderBoard() {
       ${sinSector.length ? renderColumnSinSector(sinSector) : ''}
     </div>
   `;
-
-  bindDragEvents();
 }
 
 function renderColumn(sector, items) {
-  const finalizados = items.filter(({asn}) =>
+  const finalizados = items.filter(({ asn }) =>
     asn?.estado_trabajo === 'finalizado'
   ).length;
   const activos = items.length - finalizados;
@@ -131,7 +127,7 @@ function renderColumn(sector, items) {
       <div class="col-cards" data-sector-id="${sector.id}">
         ${items.length
           ? items.map(({ v, asn }) => renderCard(v, asn, sector)).join('')
-          : `<div class="col-empty">Arrastrá una ficha aquí</div>`
+          : '<div class="col-empty">Arrastrá una ficha aquí</div>'
         }
       </div>
     </div>
@@ -158,6 +154,7 @@ function renderColumnSinSector(items) {
   `;
 }
 
+// ---- RENDER FICHA ----
 function renderCard(v, asn, sector) {
   const estado     = asn?.estado_trabajo ?? 'pendiente';
   const estadoInfo = ESTADOS[estado] ?? ESTADOS.pendiente;
@@ -194,7 +191,7 @@ function renderCard(v, asn, sector) {
   const hayTrabajos = trabajos.length > 0
     ? `<div class="card-trabajos">
         ${trabajos.slice(0, 2).map(t =>
-          `<span class="card-trabajo-tag">${t}</span>`
+          `<span class="card-trabajo-tag">${escapeHtml(t)}</span>`
         ).join('')}
         ${trabajos.length > 2
           ? `<span class="card-trabajo-more">+${trabajos.length - 2}</span>`
@@ -216,22 +213,17 @@ function renderCard(v, asn, sector) {
       : diasSinLavar <= 14
         ? '#F59E0B'
         : '#EF4444';
-    const label = diasSinLavar === 0
-      ? 'Lavado hoy'
-      : `${diasSinLavar}d sin lavar`;
+    const label = diasSinLavar === 0 ? 'Lavado hoy' : `${diasSinLavar}d sin lavar`;
     lavadoIndicador = `
       <div class="card-lavado" style="color:${color}">
         <span class="lavado-dot" style="background:${color}"></span>
         ${label}
-      </div>
-    `;
+      </div>`;
   } else {
     lavadoIndicador = `
       <div class="card-lavado card-lavado-none">
-        <span class="lavado-dot"></span>
-        Sin lavado
-      </div>
-    `;
+        <span class="lavado-dot"></span>Sin lavado
+      </div>`;
   }
 
   return `
@@ -272,33 +264,28 @@ function renderCard(v, asn, sector) {
   `;
 }
 
-// Expandir ficha colapsada — abre el panel
 function expandCard(el, vehicleId, assignmentId) {
   openPanel(vehicleId, assignmentId);
 }
 
 // Estados de trabajo
 const ESTADOS = {
-  pendiente:           { label: 'Pendiente',        bg: '#FEF3C7', color: '#92400E' },
-  esperando_repuestos: { label: 'Esp. repuestos',   bg: '#FEE2E2', color: '#7F1D1D' },
-  programado:          { label: 'Programado',        bg: '#DBEAFE', color: '#1E3A8A' },
-  finalizado:          { label: 'Finalizado',        bg: '#D1FAE5', color: '#064E3B' },
-  cancelado:           { label: 'Cancelado',         bg: '#F3F4F6', color: '#374151' },
+  pendiente:           { label: 'Pendiente',       bg: '#FEF3C7', color: '#92400E' },
+  esperando_repuestos: { label: 'Esp. repuestos',  bg: '#FEE2E2', color: '#7F1D1D' },
+  programado:          { label: 'Programado',       bg: '#DBEAFE', color: '#1E3A8A' },
+  finalizado:          { label: 'Finalizado',       bg: '#D1FAE5', color: '#064E3B' },
+  cancelado:           { label: 'Cancelado',        bg: '#F3F4F6', color: '#374151' },
 };
 
 // ---- DRAG & DROP ----
-let dragVehicleId  = null;
-let dragVersion    = null;
-let dragSourceCol  = null;
-let dragCardEl     = null;
-
-function bindDragEvents() {} // los eventos están inline en el HTML
+let dragVehicleId = null;
+let dragVersion   = null;
+let dragSourceCol = null;
 
 function onDragStart(e) {
   dragVehicleId = e.currentTarget.dataset.vehicleId;
   dragVersion   = parseInt(e.currentTarget.dataset.version);
   dragSourceCol = e.currentTarget.closest('[data-sector-id]')?.dataset.sectorId;
-  dragCardEl    = e.currentTarget;
   e.dataTransfer.effectAllowed = 'move';
   e.currentTarget.classList.add('is-dragging');
 }
@@ -313,7 +300,7 @@ function onDragEnd(e) {
 function onDragOver(e) {
   e.preventDefault();
   e.dataTransfer.dropEffect = 'move';
-  e.currentTarget().classList.add('drag-over');
+  e.currentTarget.classList.add('drag-over');
 }
 
 function onDragLeave(e) {
@@ -331,17 +318,16 @@ async function onDrop(e) {
   if (!dragVehicleId || targetSectorId === dragSourceCol) return;
   if (targetSectorId === 'none') return;
 
-  // Mover visualmente (optimistic UI)
+  // Optimistic UI
   const card = document.querySelector(`[data-vehicle-id="${dragVehicleId}"]`);
+  const originalParent = card?.parentElement;
   const cardsContainer = col.querySelector('.col-cards');
   if (card && cardsContainer) {
     const empty = cardsContainer.querySelector('.col-empty');
     if (empty) empty.remove();
     cardsContainer.appendChild(card);
-    card.dataset.version = '1';
   }
 
-  // Llamar RPC con optimistic locking
   const { data: result, error } = await db.rpc('move_vehicle_to_sector', {
     p_vehicle_id:   dragVehicleId,
     p_sector_id:    targetSectorId,
@@ -350,52 +336,34 @@ async function onDrop(e) {
   });
 
   if (error || result === 'conflict') {
+    if (originalParent && card) originalParent.appendChild(card);
     showToast(
       result === 'conflict'
         ? 'Ya fue movido por otro operario — tablero actualizado'
         : 'Error al mover el vehículo',
       result === 'conflict' ? 'warning' : 'error'
     );
-    await loadBoard(); // re-sincronizar
+    await loadBoard();
     return;
   }
 
   showToast('Vehículo movido', 'ok');
+  await loadBoard();
 }
 
-// ---- CATÁLOGO DE TRABAJOS (cacheado al cargar) ----
-let taskCatalog = [];
-
-async function loadTaskCatalog() {
-  const { data, error } = await db
-    .from('sector_task_catalog')
-    .select('*')
-    .eq('activo', true)
-    .order('orden');
-  if (!error) taskCatalog = data ?? [];
-}
-
-// Llamar en initApp — agregar a app.js:
-// await loadTaskCatalog();
-
-// ---- PANEL — TAB TRABAJO (reemplazar función existente) ----
+// ---- PANEL — TAB TRABAJO ----
 async function renderPanelTrabajo() {
   if (!currentVehicleId) return;
 
   const v   = vehicles.find(x => x.id === currentVehicleId);
   const asn = assignments.find(x => x.id === currentAssignmentId);
 
-  // Sector actual
-  const sector = sectors.find(s => s.id === asn?.sector_id);
+  const sector     = sectors.find(s => s.id === asn?.sector_id);
   const sectorSlug = sector?.slug ?? '';
 
-  // Trabajos ya guardados
   const trabajosGuardados = asn?.trabajos ?? [];
+  const catalogoSector    = taskCatalog.filter(t => t.sector_slug === sectorSlug);
 
-  // Catálogo del sector actual
-  const catalogoSector = taskCatalog.filter(t => t.sector_slug === sectorSlug);
-
-  // Agrupar por categoría
   const porCategoria = {};
   for (const t of catalogoSector) {
     if (!porCategoria[t.categoria]) porCategoria[t.categoria] = [];
@@ -409,53 +377,48 @@ async function renderPanelTrabajo() {
 
   const body = document.getElementById('panel-body');
   body.innerHTML = `
-
-    ${sector ? `
+    ${catalogoSector.length > 0 ? `
     <div class="panel-section">
-      <label class="panel-label">Trabajos — ${sector.nombre}</label>
-
-      ${Object.keys(porCategoria).length > 0 ? `
-        <div class="task-catalog">
-          ${Object.entries(porCategoria).map(([cat, items]) => `
-            <div class="task-category">
-              <div class="task-cat-label">${cat}</div>
-              <div class="task-chips">
-                ${items.map(item => `
-                  <button
-                    class="task-chip ${trabajosGuardados.includes(item.nombre) ? 'selected' : ''}"
-                    data-task="${escapeHtml(item.nombre)}"
-                    onclick="toggleTask(this)">
-                    ${item.nombre}
-                  </button>
-                `).join('')}
-              </div>
+      <label class="panel-label">Trabajos — ${sector?.nombre ?? ''}</label>
+      <div class="task-catalog">
+        ${Object.entries(porCategoria).map(([cat, items]) => `
+          <div class="task-category">
+            <div class="task-cat-label">${cat}</div>
+            <div class="task-chips">
+              ${items.map(item => `
+                <button
+                  class="task-chip ${trabajosGuardados.includes(item.nombre) ? 'selected' : ''}"
+                  data-task="${escapeHtml(item.nombre)}"
+                  onclick="toggleTask(this)">
+                  ${item.nombre}
+                </button>
+              `).join('')}
             </div>
-          `).join('')}
-        </div>
-      ` : ''}
+          </div>
+        `).join('')}
+      </div>
+    </div>
+    ` : ''}
 
+    <div class="panel-section">
+      <label class="panel-label">Trabajo libre</label>
       <div class="task-free-wrap">
-        <input
-          type="text"
-          id="task-free-input"
-          class="panel-input"
-          placeholder="Agregar trabajo libre..."
-        />
+        <input type="text" id="task-free-input"
+          class="panel-input" placeholder="Agregar trabajo..." />
         <button class="btn-task-add" onclick="addFreeTask()">+ Agregar</button>
       </div>
-
       <div id="free-tasks-list">
         ${trabajosGuardados
           .filter(t => !catalogoSector.some(c => c.nombre === t))
           .map(t => `
             <div class="free-task-item">
               <span>${escapeHtml(t)}</span>
-              <button onclick="removeFreeTask('${escapeHtml(t)}')" class="btn-remove-task">✕</button>
+              <button onclick="removeFreeTask('${escapeHtml(t)}')"
+                class="btn-remove-task">✕</button>
             </div>
           `).join('')}
       </div>
     </div>
-    ` : ''}
 
     <div class="panel-section">
       <label class="panel-label">Estado del trabajo</label>
@@ -529,7 +492,7 @@ function addFreeTask() {
 
 function removeFreeTask(texto) {
   document.querySelectorAll('.free-task-item').forEach(item => {
-    if (item.querySelector('span')?.textContent === texto) {
+    if (item.querySelector('span')?.textContent.trim() === texto) {
       item.remove();
     }
   });
@@ -537,51 +500,17 @@ function removeFreeTask(texto) {
 
 function getSelectedTasks() {
   const selected = [];
-
-  // Chips del catálogo seleccionados
   document.querySelectorAll('.task-chip.selected').forEach(chip => {
     selected.push(chip.dataset.task);
   });
-
-  // Tareas libres
   document.querySelectorAll('.free-task-item span').forEach(span => {
     const t = span.textContent.trim();
     if (t) selected.push(t);
   });
-
   return selected;
 }
 
-// ---- GUARDAR TRABAJO (reemplazar saveTrabajo existente) ----
-async function saveTrabajo() {
-  if (!currentAssignmentId) return;
-
-  const estado      = selectedEstado;
-  const motivo      = selectedMotivo;
-  const fechaTaller = document.getElementById('panel-fecha-taller')?.value || null;
-  const trabajos    = getSelectedTasks();
-
-  const update = {};
-  if (estado)               update.estado_trabajo = estado;
-  if (motivo)               update.motivo         = motivo;
-  if (fechaTaller !== null) update.fecha_taller   = fechaTaller || null;
-  if (trabajos.length >= 0) update.trabajos       = trabajos;
-
-  const { error } = await db
-    .from('sector_assignments')
-    .update(update)
-    .eq('id', currentAssignmentId);
-
-  if (error) {
-    showToast('Error al guardar', 'error');
-    return;
-  }
-
-  showToast('Guardado', 'ok');
-  await loadBoard();
-  closePanel();
-}
-
+// ---- ESTADO Y MOTIVO ----
 let selectedEstado = null;
 let selectedMotivo = null;
 
@@ -593,21 +522,25 @@ function selectEstado(slug, btn) {
   });
   const info = ESTADOS[slug];
   btn.classList.add('selected');
-  btn.style.cssText = `background:${info.bg};border-color:${info.color};color:${info.color}`;
+  btn.style.cssText =
+    `background:${info.bg};border-color:${info.color};color:${info.color}`;
 
-  const motivoSection = document.getElementById('motivo-section');
-  if (motivoSection) {
-    motivoSection.style.display =
-      ['esperando_repuestos', 'cancelado'].includes(slug) ? '' : 'none';
+  const ms = document.getElementById('motivo-section');
+  if (ms) {
+    ms.style.display =
+      ['esperando_repuestos','cancelado'].includes(slug) ? '' : 'none';
   }
 }
 
 function selectMotivo(slug, btn) {
   selectedMotivo = slug;
-  document.querySelectorAll('.motivo-btn').forEach(b => b.classList.remove('selected'));
+  document.querySelectorAll('.motivo-btn').forEach(b =>
+    b.classList.remove('selected')
+  );
   btn.classList.add('selected');
 }
 
+// ---- GUARDAR TRABAJO ----
 async function saveTrabajo() {
   if (!currentAssignmentId) return;
 
@@ -620,7 +553,7 @@ async function saveTrabajo() {
   if (estado)               update.estado_trabajo = estado;
   if (motivo)               update.motivo         = motivo;
   if (fechaTaller !== null) update.fecha_taller   = fechaTaller || null;
-  if (trabajos.length >= 0) update.trabajos       = trabajos;
+  update.trabajos = trabajos;
 
   const { error } = await db
     .from('sector_assignments')
@@ -632,7 +565,7 @@ async function saveTrabajo() {
     return;
   }
 
-  // Auto-move a "En espera" si se marcó como Finalizado
+  // Auto-move a "En espera" si se marcó Finalizado
   if (estado === 'finalizado') {
     const sectorEnEspera = sectors.find(s => s.slug === 'en_espera');
     if (sectorEnEspera) {
@@ -640,18 +573,19 @@ async function saveTrabajo() {
       const expectedVer = asn?.version ?? 1;
 
       const { data: result } = await db.rpc('move_vehicle_to_sector', {
-        p_vehicle_id:   currentVehicleId,
-        p_sector_id:    sectorEnEspera.id,
-        p_expected_ver: expectedVer,
+        p_vehicle_id:     currentVehicleId,
+        p_sector_id:      sectorEnEspera.id,
+        p_expected_ver:   expectedVer,
         p_estado_trabajo: 'pendiente',
-        p_usuario_id:   currentSession?.user?.id ?? null,
+        p_usuario_id:     currentSession?.user?.id ?? null,
       });
 
-      if (result === 'ok') {
-        showToast('✓ Finalizado — movido a En espera', 'ok');
-      } else {
-        showToast('Guardado', 'ok');
-      }
+      showToast(
+        result === 'ok'
+          ? '✓ Finalizado — movido a En espera'
+          : 'Guardado',
+        'ok'
+      );
     }
   } else {
     showToast('Guardado', 'ok');
@@ -722,8 +656,8 @@ async function renderPanelComentarios() {
         }
       </div>
       <div class="comment-input-wrap">
-        <textarea id="new-comment" placeholder="Agregar observación..."
-          rows="3"></textarea>
+        <textarea id="new-comment"
+          placeholder="Agregar observación..." rows="3"></textarea>
         <button class="btn-comment" onclick="addComment()">Agregar</button>
       </div>
     </div>
@@ -768,11 +702,12 @@ function formatDateTime(iso) {
   if (!iso) return '';
   const d = new Date(iso);
   return d.toLocaleDateString('es-AR') + ' ' +
-         d.toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit' });
+    d.toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit' });
 }
 
 function escapeHtml(str) {
-  return str
+  if (!str) return '';
+  return String(str)
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
