@@ -566,7 +566,7 @@ async function saveTrabajo() {
   }
 
   // Auto-move a "En espera" si se marcó Finalizado
-  if (estado === 'finalizado') {
+ if (estado === 'finalizado' || estado === 'cancelado') {
     const sectorEnEspera = sectors.find(s => s.slug === 'en_espera');
     if (sectorEnEspera) {
       const asn         = assignments.find(a => a.id === currentAssignmentId);
