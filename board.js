@@ -4,21 +4,51 @@ let sectors  = [];
 let vehicles = [];
 let assignments = [];
 
+// Mapa vehicleId → días desde lavado
+let diasLavado = new Map();
+
 async function loadBoard() {
   try {
-    const [secRes, vehRes, asnRes] = await Promise.all([
+    const [secRes, vehRes, asnRes, lavadoRes] = await Promise.all([
       db.from('sectors').select('*').order('orden'),
       db.from('vehicles').select('*').eq('estado', 'activo').order('interno'),
       db.from('sector_assignments').select('*').eq('activo', true),
+      // Cargar historial de lavados (asignaciones finalizadas en sector lavado)
+      db.from('sector_assignments')
+        .select('vehicle_id, salida_at')
+        .eq('activo', false)
+        .not('salida_at', 'is', null)
+        .in('sector_id',
+          // subconsulta: id del sector lavado
+          db.from('sectors').select('id').eq('slug', 'lavado')
+        )
+        .order('salida_at', { ascending: false }),
     ]);
 
-    if (secRes.error) throw secRes.error;
-    if (vehRes.error) throw vehRes.error;
-    if (asnRes.error) throw asnRes.error;
+    if (secRes.error)    throw secRes.error;
+    if (vehRes.error)    throw vehRes.error;
+    if (asnRes.error)    throw asnRes.error;
 
     sectors     = secRes.data;
     vehicles    = vehRes.data;
     assignments = asnRes.data;
+
+    // Calcular días desde último lavado por vehículo
+    diasLavado = new Map();
+    if (!lavadoRes.error && lavadoRes.data) {
+      // Para cada vehículo, tomar el lavado más reciente
+      const visto = new Set();
+      for (const row of lavadoRes.data) {
+        if (visto.has(row.vehicle_id)) continue;
+        visto.add(row.vehicle_id);
+        const salida = new Date(row.salida_at);
+        const hoy    = new Date();
+        hoy.setHours(0, 0, 0, 0);
+        salida.setHours(0, 0, 0, 0);
+        const dias = Math.floor((hoy - salida) / (1000 * 60 * 60 * 24));
+        diasLavado.set(row.vehicle_id, dias);
+      }
+    }
 
     renderBoard();
   } catch (err) {
@@ -114,14 +144,13 @@ function renderColumnSinSector(items) {
   `;
 }
 
-// ---- RENDER CARD — con soporte de colapso para finalizados ----
 function renderCard(v, asn, sector) {
   const estado     = asn?.estado_trabajo ?? 'pendiente';
   const estadoInfo = ESTADOS[estado] ?? ESTADOS.pendiente;
   const finalizado = estado === 'finalizado';
   const trabajos   = asn?.trabajos ?? [];
 
-  // Ficha colapsada — solo para finalizados
+  // Ficha colapsada para finalizados
   if (finalizado) {
     return `
       <div class="card card-collapsed"
@@ -129,7 +158,7 @@ function renderCard(v, asn, sector) {
         data-vehicle-id="${v.id}"
         data-version="${asn?.version ?? 0}"
         data-assignment-id="${asn?.id ?? ''}"
-        onclick="expandCard(this, '${v.id}', '${asn?.id ?? ''}')"
+        onclick="expandCard(this,'${v.id}','${asn?.id ?? ''}')"
         ondragstart="onDragStart(event)"
         ondragend="onDragEnd(event)"
       >
@@ -147,11 +176,7 @@ function renderCard(v, asn, sector) {
     `;
   }
 
-  // Ficha normal
-  const hayFecha = asn?.fecha_taller
-    ? `<span class="card-fecha">Taller: ${formatDate(asn.fecha_taller)}</span>`
-    : '';
-
+  // Trabajos en la ficha
   const hayTrabajos = trabajos.length > 0
     ? `<div class="card-trabajos">
         ${trabajos.slice(0, 2).map(t =>
@@ -163,16 +188,48 @@ function renderCard(v, asn, sector) {
        </div>`
     : '';
 
+  // Fecha de taller
+  const hayFecha = asn?.fecha_taller
+    ? `<span class="card-fecha">🗓 ${formatDate(asn.fecha_taller)}</span>`
+    : '';
+
+  // Días desde lavado
+  const diasSinLavar = diasLavado.get(v.id);
+  let lavadoIndicador = '';
+  if (diasSinLavar !== undefined) {
+    const color = diasSinLavar <= 7
+      ? '#10B981'
+      : diasSinLavar <= 14
+        ? '#F59E0B'
+        : '#EF4444';
+    const label = diasSinLavar === 0
+      ? 'Lavado hoy'
+      : `${diasSinLavar}d sin lavar`;
+    lavadoIndicador = `
+      <div class="card-lavado" style="color:${color}">
+        <span class="lavado-dot" style="background:${color}"></span>
+        ${label}
+      </div>
+    `;
+  } else {
+    lavadoIndicador = `
+      <div class="card-lavado card-lavado-none">
+        <span class="lavado-dot"></span>
+        Sin lavado
+      </div>
+    `;
+  }
+
   return `
     <div class="card"
       draggable="true"
       data-vehicle-id="${v.id}"
       data-version="${asn?.version ?? 0}"
       data-assignment-id="${asn?.id ?? ''}"
-      onclick="openPanel('${v.id}', '${asn?.id ?? ''}')"
+      onclick="openPanel('${v.id}','${asn?.id ?? ''}')"
       ondragstart="onDragStart(event)"
       ondragend="onDragEnd(event)"
-      style="content-visibility:auto;contain-intrinsic-size:0 148px"
+      style="content-visibility:auto;contain-intrinsic-size:0 160px"
     >
       <div class="card-stripe"
         style="background:${sector?.color_hex ?? '#94a3b8'}"></div>
@@ -184,10 +241,11 @@ function renderCard(v, asn, sector) {
             ${estadoInfo.label}
           </span>
         </div>
-        <div class="card-modelo">${v.modelo}${v.version ? ' ' + v.version : ''}</div>
+        <div class="card-modelo">${v.modelo}${v.version ? ' '+v.version : ''}</div>
         <div class="card-cliente">${v.cliente ?? '<em>Sin cliente</em>'}</div>
         ${hayFecha}
         ${hayTrabajos}
+        ${lavadoIndicador}
         <div class="card-vin">
           <span class="vin-label">VIN</span>
           <span class="vin-value">${v.chasis}</span>
