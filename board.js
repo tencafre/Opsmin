@@ -7,7 +7,7 @@ let assignments = [];
 // Mapa vehicleId → días desde lavado
 let diasLavado = new Map();
 
-let diasLavado = new Map();
+
 
 async function loadBoard() {
   try {
