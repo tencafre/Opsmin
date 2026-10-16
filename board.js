@@ -59,6 +59,11 @@ function renderBoard() {
 }
 
 function renderColumn(sector, items) {
+  const finalizados = items.filter(({asn}) =>
+    asn?.estado_trabajo === 'finalizado'
+  ).length;
+  const activos = items.length - finalizados;
+
   return `
     <div class="col"
       data-sector-id="${sector.id}"
@@ -70,12 +75,19 @@ function renderColumn(sector, items) {
       <div class="col-stripe" style="background:${sector.color_hex}"></div>
       <div class="col-header">
         <span class="col-title">${sector.nombre}</span>
-        <span class="col-count">${items.length}</span>
+        <div class="col-counts">
+          <span class="col-count">${activos}</span>
+          ${finalizados > 0
+            ? `<span class="col-count-done" title="${finalizados} finalizados">
+                ✓${finalizados}
+               </span>`
+            : ''}
+        </div>
       </div>
       <div class="col-cards" data-sector-id="${sector.id}">
         ${items.length
           ? items.map(({ v, asn }) => renderCard(v, asn, sector)).join('')
-          : '<div class="col-empty">Arrastrá una ficha aquí</div>'
+          : `<div class="col-empty">Arrastrá una ficha aquí</div>`
         }
       </div>
     </div>
@@ -102,11 +114,53 @@ function renderColumnSinSector(items) {
   `;
 }
 
+// ---- RENDER CARD — con soporte de colapso para finalizados ----
 function renderCard(v, asn, sector) {
-  const estado  = asn?.estado_trabajo ?? 'pendiente';
+  const estado     = asn?.estado_trabajo ?? 'pendiente';
   const estadoInfo = ESTADOS[estado] ?? ESTADOS.pendiente;
+  const finalizado = estado === 'finalizado';
+  const trabajos   = asn?.trabajos ?? [];
+
+  // Ficha colapsada — solo para finalizados
+  if (finalizado) {
+    return `
+      <div class="card card-collapsed"
+        draggable="true"
+        data-vehicle-id="${v.id}"
+        data-version="${asn?.version ?? 0}"
+        data-assignment-id="${asn?.id ?? ''}"
+        onclick="expandCard(this, '${v.id}', '${asn?.id ?? ''}')"
+        ondragstart="onDragStart(event)"
+        ondragend="onDragEnd(event)"
+      >
+        <div class="card-collapsed-stripe"
+          style="background:${sector?.color_hex ?? '#94a3b8'}"></div>
+        <div class="card-collapsed-body">
+          <span class="card-collapsed-interno">INT ${v.interno ?? '—'}</span>
+          <span class="card-collapsed-modelo">${v.modelo}</span>
+          <span class="card-collapsed-estado"
+            style="background:${estadoInfo.bg};color:${estadoInfo.color}">
+            ✓ ${estadoInfo.label}
+          </span>
+        </div>
+      </div>
+    `;
+  }
+
+  // Ficha normal
   const hayFecha = asn?.fecha_taller
     ? `<span class="card-fecha">Taller: ${formatDate(asn.fecha_taller)}</span>`
+    : '';
+
+  const hayTrabajos = trabajos.length > 0
+    ? `<div class="card-trabajos">
+        ${trabajos.slice(0, 2).map(t =>
+          `<span class="card-trabajo-tag">${t}</span>`
+        ).join('')}
+        ${trabajos.length > 2
+          ? `<span class="card-trabajo-more">+${trabajos.length - 2}</span>`
+          : ''}
+       </div>`
     : '';
 
   return `
@@ -120,26 +174,35 @@ function renderCard(v, asn, sector) {
       ondragend="onDragEnd(event)"
       style="content-visibility:auto;contain-intrinsic-size:0 148px"
     >
-      <div class="card-stripe" style="background:${sector?.color_hex ?? '#94a3b8'}"></div>
+      <div class="card-stripe"
+        style="background:${sector?.color_hex ?? '#94a3b8'}"></div>
       <div class="card-body">
         <div class="card-top">
           <span class="card-interno">INT ${v.interno ?? '—'}</span>
-          <span class="estado-pill" style="background:${estadoInfo.bg};color:${estadoInfo.color}">
+          <span class="estado-pill"
+            style="background:${estadoInfo.bg};color:${estadoInfo.color}">
             ${estadoInfo.label}
           </span>
         </div>
         <div class="card-modelo">${v.modelo}${v.version ? ' ' + v.version : ''}</div>
         <div class="card-cliente">${v.cliente ?? '<em>Sin cliente</em>'}</div>
         ${hayFecha}
+        ${hayTrabajos}
         <div class="card-vin">
           <span class="vin-label">VIN</span>
           <span class="vin-value">${v.chasis}</span>
-          <button class="vin-copy" onclick="event.stopPropagation();copyVin('${v.chasis}')"
+          <button class="vin-copy"
+            onclick="event.stopPropagation();copyVin('${v.chasis}')"
             title="Copiar VIN">⎘</button>
         </div>
       </div>
     </div>
   `;
+}
+
+// Expandir ficha colapsada — abre el panel
+function expandCard(el, vehicleId, assignmentId) {
+  openPanel(vehicleId, assignmentId);
 }
 
 // Estados de trabajo
@@ -479,16 +542,13 @@ async function saveTrabajo() {
   const estado      = selectedEstado;
   const motivo      = selectedMotivo;
   const fechaTaller = document.getElementById('panel-fecha-taller')?.value || null;
+  const trabajos    = getSelectedTasks();
 
   const update = {};
-  if (estado)      update.estado_trabajo = estado;
-  if (motivo)      update.motivo         = motivo;
-  if (fechaTaller !== null) update.fecha_taller = fechaTaller || null;
-
-  if (!Object.keys(update).length) {
-    showToast('Sin cambios para guardar', 'info');
-    return;
-  }
+  if (estado)               update.estado_trabajo = estado;
+  if (motivo)               update.motivo         = motivo;
+  if (fechaTaller !== null) update.fecha_taller   = fechaTaller || null;
+  if (trabajos.length >= 0) update.trabajos       = trabajos;
 
   const { error } = await db
     .from('sector_assignments')
@@ -500,7 +560,31 @@ async function saveTrabajo() {
     return;
   }
 
-  showToast('Guardado', 'ok');
+  // Auto-move a "En espera" si se marcó como Finalizado
+  if (estado === 'finalizado') {
+    const sectorEnEspera = sectors.find(s => s.slug === 'en_espera');
+    if (sectorEnEspera) {
+      const asn         = assignments.find(a => a.id === currentAssignmentId);
+      const expectedVer = asn?.version ?? 1;
+
+      const { data: result } = await db.rpc('move_vehicle_to_sector', {
+        p_vehicle_id:   currentVehicleId,
+        p_sector_id:    sectorEnEspera.id,
+        p_expected_ver: expectedVer,
+        p_estado_trabajo: 'pendiente',
+        p_usuario_id:   currentSession?.user?.id ?? null,
+      });
+
+      if (result === 'ok') {
+        showToast('✓ Finalizado — movido a En espera', 'ok');
+      } else {
+        showToast('Guardado', 'ok');
+      }
+    }
+  } else {
+    showToast('Guardado', 'ok');
+  }
+
   await loadBoard();
   closePanel();
 }
