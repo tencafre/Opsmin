@@ -7,50 +7,64 @@ let assignments = [];
 // Mapa vehicleId → días desde lavado
 let diasLavado = new Map();
 
+let diasLavado = new Map();
+
 async function loadBoard() {
   try {
-    const [secRes, vehRes, asnRes, lavadoRes] = await Promise.all([
+    // Primero obtener el ID del sector lavado
+    const { data: sectorLavado } = await db
+      .from('sectors')
+      .select('id')
+      .eq('slug', 'lavado')
+      .single();
+
+    const lavadoId = sectorLavado?.id ?? null;
+
+    // Queries paralelas
+    const [secRes, vehRes, asnRes] = await Promise.all([
       db.from('sectors').select('*').order('orden'),
       db.from('vehicles').select('*').eq('estado', 'activo').order('interno'),
       db.from('sector_assignments').select('*').eq('activo', true),
-      // Cargar historial de lavados (asignaciones finalizadas en sector lavado)
-      db.from('sector_assignments')
-        .select('vehicle_id, salida_at')
-        .eq('activo', false)
-        .not('salida_at', 'is', null)
-        .in('sector_id',
-          // subconsulta: id del sector lavado
-          db.from('sectors').select('id').eq('slug', 'lavado')
-        )
-        .order('salida_at', { ascending: false }),
     ]);
 
-    if (secRes.error)    throw secRes.error;
-    if (vehRes.error)    throw vehRes.error;
-    if (asnRes.error)    throw asnRes.error;
+    if (secRes.error) throw secRes.error;
+    if (vehRes.error) throw vehRes.error;
+    if (asnRes.error) throw asnRes.error;
 
     sectors     = secRes.data;
     vehicles    = vehRes.data;
     assignments = asnRes.data;
 
-    // Calcular días desde último lavado por vehículo
+    // Calcular días desde último lavado
     diasLavado = new Map();
-    if (!lavadoRes.error && lavadoRes.data) {
-      // Para cada vehículo, tomar el lavado más reciente
-      const visto = new Set();
-      for (const row of lavadoRes.data) {
-        if (visto.has(row.vehicle_id)) continue;
-        visto.add(row.vehicle_id);
-        const salida = new Date(row.salida_at);
-        const hoy    = new Date();
+
+    if (lavadoId) {
+      const { data: lavados, error: lavErr } = await db
+        .from('sector_assignments')
+        .select('vehicle_id, salida_at')
+        .eq('sector_id', lavadoId)
+        .eq('activo', false)
+        .not('salida_at', 'is', null)
+        .order('salida_at', { ascending: false });
+
+      if (!lavErr && lavados) {
+        const visto = new Set();
+        const hoy   = new Date();
         hoy.setHours(0, 0, 0, 0);
-        salida.setHours(0, 0, 0, 0);
-        const dias = Math.floor((hoy - salida) / (1000 * 60 * 60 * 24));
-        diasLavado.set(row.vehicle_id, dias);
+
+        for (const row of lavados) {
+          if (visto.has(row.vehicle_id)) continue;
+          visto.add(row.vehicle_id);
+          const salida = new Date(row.salida_at);
+          salida.setHours(0, 0, 0, 0);
+          const dias = Math.floor((hoy - salida) / (1000 * 60 * 60 * 24));
+          diasLavado.set(row.vehicle_id, dias);
+        }
       }
     }
 
     renderBoard();
+
   } catch (err) {
     console.error('[board] Error cargando datos:', err);
     showToast('Error cargando el tablero', 'error');
