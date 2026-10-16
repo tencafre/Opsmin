@@ -6,6 +6,7 @@ async function initApp(session) {
   currentSession = session;
   await Promise.all([
     loadBoard(),
+    loadTaskCatalog(),  // ← agregar esta línea
     initRealtime(),
   ]);
   showView('board');

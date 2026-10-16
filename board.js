@@ -228,20 +228,100 @@ async function onDrop(e) {
   showToast('Vehículo movido', 'ok');
 }
 
-// ---- PANEL — TAB TRABAJO ----
+// ---- CATÁLOGO DE TRABAJOS (cacheado al cargar) ----
+let taskCatalog = [];
+
+async function loadTaskCatalog() {
+  const { data, error } = await db
+    .from('sector_task_catalog')
+    .select('*')
+    .eq('activo', true)
+    .order('orden');
+  if (!error) taskCatalog = data ?? [];
+}
+
+// Llamar en initApp — agregar a app.js:
+// await loadTaskCatalog();
+
+// ---- PANEL — TAB TRABAJO (reemplazar función existente) ----
 async function renderPanelTrabajo() {
   if (!currentVehicleId) return;
 
   const v   = vehicles.find(x => x.id === currentVehicleId);
   const asn = assignments.find(x => x.id === currentAssignmentId);
 
-  const body = document.getElementById('panel-body');
+  // Sector actual
+  const sector = sectors.find(s => s.id === asn?.sector_id);
+  const sectorSlug = sector?.slug ?? '';
+
+  // Trabajos ya guardados
+  const trabajosGuardados = asn?.trabajos ?? [];
+
+  // Catálogo del sector actual
+  const catalogoSector = taskCatalog.filter(t => t.sector_slug === sectorSlug);
+
+  // Agrupar por categoría
+  const porCategoria = {};
+  for (const t of catalogoSector) {
+    if (!porCategoria[t.categoria]) porCategoria[t.categoria] = [];
+    porCategoria[t.categoria].push(t);
+  }
+
   document.getElementById('panel-title').textContent =
     `${v?.modelo ?? ''} — INT ${v?.interno ?? '—'}`;
   document.getElementById('panel-sub').textContent =
     `${v?.color ?? ''} · ${v?.cliente ?? 'Sin cliente'}`;
 
+  const body = document.getElementById('panel-body');
   body.innerHTML = `
+
+    ${sector ? `
+    <div class="panel-section">
+      <label class="panel-label">Trabajos — ${sector.nombre}</label>
+
+      ${Object.keys(porCategoria).length > 0 ? `
+        <div class="task-catalog">
+          ${Object.entries(porCategoria).map(([cat, items]) => `
+            <div class="task-category">
+              <div class="task-cat-label">${cat}</div>
+              <div class="task-chips">
+                ${items.map(item => `
+                  <button
+                    class="task-chip ${trabajosGuardados.includes(item.nombre) ? 'selected' : ''}"
+                    data-task="${escapeHtml(item.nombre)}"
+                    onclick="toggleTask(this)">
+                    ${item.nombre}
+                  </button>
+                `).join('')}
+              </div>
+            </div>
+          `).join('')}
+        </div>
+      ` : ''}
+
+      <div class="task-free-wrap">
+        <input
+          type="text"
+          id="task-free-input"
+          class="panel-input"
+          placeholder="Agregar trabajo libre..."
+        />
+        <button class="btn-task-add" onclick="addFreeTask()">+ Agregar</button>
+      </div>
+
+      <div id="free-tasks-list">
+        ${trabajosGuardados
+          .filter(t => !catalogoSector.some(c => c.nombre === t))
+          .map(t => `
+            <div class="free-task-item">
+              <span>${escapeHtml(t)}</span>
+              <button onclick="removeFreeTask('${escapeHtml(t)}')" class="btn-remove-task">✕</button>
+            </div>
+          `).join('')}
+      </div>
+    </div>
+    ` : ''}
+
     <div class="panel-section">
       <label class="panel-label">Estado del trabajo</label>
       <div class="estado-grid">
@@ -258,7 +338,8 @@ async function renderPanelTrabajo() {
     </div>
 
     <div class="panel-section" id="motivo-section"
-      style="${['esperando_repuestos','cancelado'].includes(asn?.estado_trabajo) ? '' : 'display:none'}">
+      style="${['esperando_repuestos','cancelado'].includes(asn?.estado_trabajo)
+        ? '' : 'display:none'}">
       <label class="panel-label">Motivo</label>
       <div class="motivo-list">
         ${[
@@ -287,6 +368,83 @@ async function renderPanelTrabajo() {
       <button class="btn-save" onclick="saveTrabajo()">Guardar</button>
     </div>
   `;
+}
+
+// ---- GESTIÓN DE TRABAJOS ----
+function toggleTask(btn) {
+  btn.classList.toggle('selected');
+}
+
+function addFreeTask() {
+  const input = document.getElementById('task-free-input');
+  const texto = input?.value.trim();
+  if (!texto) return;
+
+  const lista = document.getElementById('free-tasks-list');
+  const item  = document.createElement('div');
+  item.className = 'free-task-item';
+  item.innerHTML = `
+    <span>${escapeHtml(texto)}</span>
+    <button onclick="removeFreeTask('${escapeHtml(texto)}')"
+      class="btn-remove-task">✕</button>
+  `;
+  lista.appendChild(item);
+  input.value = '';
+}
+
+function removeFreeTask(texto) {
+  document.querySelectorAll('.free-task-item').forEach(item => {
+    if (item.querySelector('span')?.textContent === texto) {
+      item.remove();
+    }
+  });
+}
+
+function getSelectedTasks() {
+  const selected = [];
+
+  // Chips del catálogo seleccionados
+  document.querySelectorAll('.task-chip.selected').forEach(chip => {
+    selected.push(chip.dataset.task);
+  });
+
+  // Tareas libres
+  document.querySelectorAll('.free-task-item span').forEach(span => {
+    const t = span.textContent.trim();
+    if (t) selected.push(t);
+  });
+
+  return selected;
+}
+
+// ---- GUARDAR TRABAJO (reemplazar saveTrabajo existente) ----
+async function saveTrabajo() {
+  if (!currentAssignmentId) return;
+
+  const estado      = selectedEstado;
+  const motivo      = selectedMotivo;
+  const fechaTaller = document.getElementById('panel-fecha-taller')?.value || null;
+  const trabajos    = getSelectedTasks();
+
+  const update = {};
+  if (estado)               update.estado_trabajo = estado;
+  if (motivo)               update.motivo         = motivo;
+  if (fechaTaller !== null) update.fecha_taller   = fechaTaller || null;
+  if (trabajos.length >= 0) update.trabajos       = trabajos;
+
+  const { error } = await db
+    .from('sector_assignments')
+    .update(update)
+    .eq('id', currentAssignmentId);
+
+  if (error) {
+    showToast('Error al guardar', 'error');
+    return;
+  }
+
+  showToast('Guardado', 'ok');
+  await loadBoard();
+  closePanel();
 }
 
 let selectedEstado = null;

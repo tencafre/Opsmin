@@ -1,4 +1,4 @@
-// ---- LISTADO DEL DÍA ----
+  // ---- LISTADO DEL DÍA ----
 
 function renderListado() {
   const container = document.getElementById('view-listado');
@@ -60,7 +60,21 @@ function renderListado() {
                   <span class="sector-tag"
                     style="background:${sector?.color_hex ?? '#94a3b8'}20;
                            color:${sector?.color_hex ?? '#94a3b8'}">
-                    ${sector?.nombre ?? '—'}
+                              <td>
+                                <div style="display:flex;flex-direction:column;gap:2px">
+                                  <span class="sector-tag"
+                                    style="background:${sector?.color_hex ?? '#94a3b8'}20;
+                                          color:${sector?.color_hex ?? '#94a3b8'}">
+                                    ${sector?.nombre ?? '—'}
+                                  </span>
+                                  ${asn.trabajos?.length
+                                    ? `<span style="font-size:10px;color:var(--text-secondary)">
+                                        ${asn.trabajos.slice(0,2).join(' · ')}
+                                        ${asn.trabajos.length > 2 ? ` +${asn.trabajos.length - 2}` : ''}
+                                      </span>`
+                                    : ''}
+                                </div>
+                              </td>
                   </span>
                 </td>
                 <td>

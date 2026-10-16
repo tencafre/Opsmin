@@ -1077,3 +1077,93 @@ input, textarea, select {
 .card.search-match {
   box-shadow: 0 0 0 2px var(--accent);
 }
+/* ---- CATÁLOGO DE TRABAJOS ---- */
+.task-catalog {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.task-category { }
+
+.task-cat-label {
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: .4px;
+  margin-bottom: 5px;
+}
+
+.task-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.task-chip {
+  padding: 4px 10px;
+  border: 1.5px solid var(--border-strong);
+  border-radius: 20px;
+  font-size: 11px;
+  color: var(--text-secondary);
+  background: var(--surface);
+  cursor: pointer;
+  transition: all .12s;
+  white-space: nowrap;
+}
+
+.task-chip:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.task-chip.selected {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+.task-free-wrap {
+  display: flex;
+  gap: 6px;
+  margin-top: 8px;
+  margin-bottom: 8px;
+}
+
+.task-free-wrap .panel-input {
+  flex: 1;
+}
+
+.btn-task-add {
+  padding: 6px 10px;
+  background: var(--surface-2);
+  border: 1.5px solid var(--border-strong);
+  border-radius: var(--radius);
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text);
+  white-space: nowrap;
+  transition: background .1s;
+}
+.btn-task-add:hover { background: var(--border); }
+
+.free-task-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 5px 8px;
+  background: var(--surface-2);
+  border-radius: var(--radius);
+  margin-bottom: 4px;
+  font-size: 12px;
+}
+
+.btn-remove-task {
+  font-size: 11px;
+  color: var(--text-muted);
+  padding: 0 4px;
+  transition: color .1s;
+}
+.btn-remove-task:hover { color: var(--urgencia-critico); }
