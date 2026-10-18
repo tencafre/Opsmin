@@ -6,11 +6,41 @@ async function initApp(session) {
   currentSession = session;
   await Promise.all([
     loadBoard(),
-    loadTaskCatalog(),  // ← agregar esta línea
+    loadTaskCatalog(),
     initRealtime(),
+    checkAlertas(),
   ]);
   showView('board');
   monitorConnection();
+}
+
+async function checkAlertas() {
+  const { data: alertas } = await db
+    .from('delivery_alerts')
+    .select('*')
+    .eq('estado', 'activa')
+    .order('created_at', { ascending: false });
+
+  if (!alertas?.length) return;
+
+  // Mostrar badge en topbar
+  const badge = document.getElementById('alertas-badge');
+  if (badge) {
+    badge.textContent = alertas.length;
+    badge.classList.remove('hidden');
+  }
+
+  // Agrupar por tipo
+  const remitos  = alertas.filter(a => a.tipo === 'remito_pendiente');
+  const sinConf  = alertas.filter(a => a.tipo === 'baja_sin_confirmar');
+
+  let msg = '';
+  if (remitos.length)
+    msg += `⚠️ ${remitos.length} vehículo${remitos.length > 1 ? 's' : ''} entregado${remitos.length > 1 ? 's' : ''} sin remito en DMS. `;
+  if (sinConf.length)
+    msg += `⚠️ ${sinConf.length} baja${sinConf.length > 1 ? 's' : ''} en CSV sin confirmar en tablero.`;
+
+  if (msg) showToast(msg, 'warning');
 }
 
 function showScreen(name) {

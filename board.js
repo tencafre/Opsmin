@@ -275,6 +275,7 @@ const ESTADOS = {
   programado:          { label: 'Programado',       bg: '#DBEAFE', color: '#1E3A8A' },
   finalizado:          { label: 'Finalizado',       bg: '#D1FAE5', color: '#064E3B' },
   cancelado:           { label: 'Cancelado',        bg: '#F3F4F6', color: '#374151' },
+  entregado:           { label: 'Entregado',        bg: '#0f172a', color: '#f8fafc' },
 };
 
 // ---- DRAG & DROP ----
@@ -566,30 +567,54 @@ async function saveTrabajo() {
   }
 
   // Auto-move a "En espera" si se marcó Finalizado
- if (estado === 'finalizado' || estado === 'cancelado') {
-    const sectorEnEspera = sectors.find(s => s.slug === 'en_espera');
-    if (sectorEnEspera) {
-      const asn         = assignments.find(a => a.id === currentAssignmentId);
-      const expectedVer = asn?.version ?? 1;
+ // Auto-move según estado
+if (estado === 'finalizado' || estado === 'cancelado') {
+  const sectorDestino = sectors.find(s => s.slug === 'en_espera');
+  if (sectorDestino) {
+    const asn         = assignments.find(a => a.id === currentAssignmentId);
+    const expectedVer = asn?.version ?? 1;
 
-      const { data: result } = await db.rpc('move_vehicle_to_sector', {
-        p_vehicle_id:     currentVehicleId,
-        p_sector_id:      sectorEnEspera.id,
-        p_expected_ver:   expectedVer,
-        p_estado_trabajo: 'pendiente',
-        p_usuario_id:     currentSession?.user?.id ?? null,
-      });
+    const { data: result } = await db.rpc('move_vehicle_to_sector', {
+      p_vehicle_id:     currentVehicleId,
+      p_sector_id:      sectorDestino.id,
+      p_expected_ver:   expectedVer,
+      p_estado_trabajo: 'pendiente',
+      p_usuario_id:     currentSession?.user?.id ?? null,
+    });
 
-      showToast(
-        result === 'ok'
-          ? '✓ Finalizado — movido a En espera'
-          : 'Guardado',
-        'ok'
-      );
-    }
-  } else {
-    showToast('Guardado', 'ok');
+    showToast(
+      result === 'ok'
+        ? `✓ ${ESTADOS[estado].label} — movido a En espera`
+        : 'Guardado',
+      'ok'
+    );
   }
+
+} else if (estado === 'entregado') {
+  // Marcar entregado_at y mover a columna Entregados
+  await db
+    .from('sector_assignments')
+    .update({ entregado_at: new Date().toISOString() })
+    .eq('id', currentAssignmentId);
+
+  const sectorEntregados = sectors.find(s => s.slug === 'entregados');
+  if (sectorEntregados) {
+    const asn         = assignments.find(a => a.id === currentAssignmentId);
+    const expectedVer = asn?.version ?? 1;
+
+    await db.rpc('move_vehicle_to_sector', {
+      p_vehicle_id:     currentVehicleId,
+      p_sector_id:      sectorEntregados.id,
+      p_expected_ver:   expectedVer,
+      p_estado_trabajo: 'entregado',
+      p_usuario_id:     currentSession?.user?.id ?? null,
+    });
+  }
+  showToast('✓ Entregado — pendiente confirmación de remito', 'ok');
+
+} else {
+  showToast('Guardado', 'ok');
+}
 
   await loadBoard();
   closePanel();
