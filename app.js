@@ -49,11 +49,10 @@ function showScreen(name) {
 }
 
 function showView(name) {
-  ['board', 'upload', 'listado'].forEach(v => {
-    document.getElementById(`view-${v}`).classList.toggle('hidden', v !== name);
+  ['board', 'upload', 'listado', 'alertas'].forEach(v => {
+    document.getElementById(`view-${v}`)?.classList.toggle('hidden', v !== name);
   });
 
-  // Actualizar tabs activos
   document.querySelectorAll('.nav-tab').forEach(t => t.classList.remove('active'));
   const tabMap = { board: 0, listado: 1 };
   if (tabMap[name] !== undefined) {
@@ -62,6 +61,7 @@ function showView(name) {
 
   if (name === 'listado') renderListado();
   if (name === 'upload')  renderUpload();
+  if (name === 'alertas') renderAlertas();
 }
 
 // ---- PANEL LATERAL ----
