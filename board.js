@@ -556,6 +556,11 @@ async function saveTrabajo() {
   if (fechaTaller !== null) update.fecha_taller   = fechaTaller || null;
   update.trabajos = trabajos;
 
+  // Agregar entregado_at si el estado es entregado
+if (estado === 'entregado') {
+  update.entregado_at = new Date().toISOString();
+}
+
   const { error } = await db
     .from('sector_assignments')
     .update(update)
@@ -592,10 +597,7 @@ if (estado === 'finalizado' || estado === 'cancelado') {
 
 } else if (estado === 'entregado') {
   // Marcar entregado_at y mover a columna Entregados
-  await db
-    .from('sector_assignments')
-    .update({ entregado_at: new Date().toISOString() })
-    .eq('id', currentAssignmentId);
+  
 
   const sectorEntregados = sectors.find(s => s.slug === 'entregados');
   if (sectorEntregados) {
