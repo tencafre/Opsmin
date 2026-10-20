@@ -596,13 +596,11 @@ if (estado === 'finalizado' || estado === 'cancelado') {
   }
 
 } else if (estado === 'entregado') {
-  // Marcar entregado_at y mover a columna Entregados
-  
-
   const sectorEntregados = sectors.find(s => s.slug === 'entregados');
   if (sectorEntregados) {
-    const asn         = assignments.find(a => a.id === currentAssignmentId);
-    const expectedVer = asn?.version ?? 1;
+    const asn          = assignments.find(a => a.id === currentAssignmentId);
+    const expectedVer  = asn?.version ?? 1;
+    const entregadoAt  = new Date().toISOString();
 
     await db.rpc('move_vehicle_to_sector', {
       p_vehicle_id:     currentVehicleId,
@@ -610,10 +608,10 @@ if (estado === 'finalizado' || estado === 'cancelado') {
       p_expected_ver:   expectedVer,
       p_estado_trabajo: 'entregado',
       p_usuario_id:     currentSession?.user?.id ?? null,
+      p_entregado_at:   entregadoAt,
     });
   }
   showToast('✓ Entregado — pendiente confirmación de remito', 'ok');
-
 } else {
   showToast('Guardado', 'ok');
 }
