@@ -52,23 +52,31 @@ async function upsertVehicles(vehicles, supabaseUrl, serviceKey) {
 async function detectarBajas(chassisEnCSV, supabaseUrl, serviceKey) {
   console.log(`[bajas] Verificando bajas. Vehículos en CSV: ${chassisEnCSV.length}`);
 
-  const res = await fetch(
+  // 1 query — todos los vehículos activos
+  const resV = await fetch(
     `${supabaseUrl}/rest/v1/vehicles?estado=eq.activo&select=id,chasis,interno,modelo`,
-    {
-      headers: {
-        'apikey':        serviceKey,
-        'Authorization': `Bearer ${serviceKey}`,
-      },
-    }
+    { headers: { 'apikey': serviceKey, 'Authorization': `Bearer ${serviceKey}` } }
   );
-
-  if (!res.ok) {
-    console.error('[bajas] Error obteniendo vehículos activos:', await res.text());
+  if (!resV.ok) {
+    console.error('[bajas] Error obteniendo vehículos:', await resV.text());
     return { archivados: 0, alertas_nuevas: 0, alertas: [] };
   }
-
-  const activos = await res.json();
+  const activos = await resV.json();
   console.log(`[bajas] Vehículos activos en DB: ${activos.length}`);
+
+  // 1 query — todas las asignaciones activas
+  const resA = await fetch(
+    `${supabaseUrl}/rest/v1/sector_assignments?activo=eq.true&select=vehicle_id,estado_trabajo,entregado_at`,
+    { headers: { 'apikey': serviceKey, 'Authorization': `Bearer ${serviceKey}` } }
+  );
+  if (!resA.ok) {
+    console.error('[bajas] Error obteniendo asignaciones:', await resA.text());
+    return { archivados: 0, alertas_nuevas: 0, alertas: [] };
+  }
+  const asignaciones = await resA.json();
+
+  // Índice en memoria: vehicleId → asignación
+  const asnByVehicle = new Map(asignaciones.map(a => [a.vehicle_id, a]));
 
   const setCSV    = new Set(chassisEnCSV);
   const alertas   = [];
@@ -79,27 +87,8 @@ async function detectarBajas(chassisEnCSV, supabaseUrl, serviceKey) {
 
     console.log(`[bajas] Fuera del CSV: INT ${v.interno} — ${v.chasis}`);
 
-    // Buscar si tiene asignación activa con estado entregado
-    const resAsn = await fetch(
-      `${supabaseUrl}/rest/v1/sector_assignments` +
-      `?vehicle_id=eq.${v.id}&activo=eq.true&select=estado_trabajo,entregado_at`,
-      {
-        headers: {
-          'apikey':        serviceKey,
-          'Authorization': `Bearer ${serviceKey}`,
-        },
-      }
-    );
-
-    if (!resAsn.ok) {
-      console.error(`[bajas] Error obteniendo asignación para ${v.chasis}`);
-      continue;
-    }
-
-    const asns      = await resAsn.json();
-    const entregado = asns.some(a => a.estado_trabajo === 'entregado');
-
-    console.log(`[bajas] INT ${v.interno} — entregado: ${entregado}, asignaciones: ${JSON.stringify(asns)}`);
+    const asn       = asnByVehicle.get(v.id);
+    const entregado = asn?.estado_trabajo === 'entregado';
 
     if (entregado) {
       aArchivar.push(v.id);
@@ -114,10 +103,13 @@ async function detectarBajas(chassisEnCSV, supabaseUrl, serviceKey) {
     }
   }
 
-  // Archivar confirmados
-  for (const id of aArchivar) {
+  // Archivar en lotes
+  const BATCH = 20;
+  for (let i = 0; i < aArchivar.length; i += BATCH) {
+    const ids   = aArchivar.slice(i, i + BATCH);
+    const inIds = ids.join(',');
     const r = await fetch(
-      `${supabaseUrl}/rest/v1/vehicles?id=eq.${id}`,
+      `${supabaseUrl}/rest/v1/vehicles?id=in.(${inIds})`,
       {
         method:  'PATCH',
         headers: {
@@ -128,11 +120,10 @@ async function detectarBajas(chassisEnCSV, supabaseUrl, serviceKey) {
         body: JSON.stringify({ estado: 'archivado' }),
       }
     );
-    if (!r.ok) console.error(`[bajas] Error archivando ${id}:`, await r.text());
-    else console.log(`[bajas] Archivado: ${id}`);
+    if (!r.ok) console.error('[bajas] Error archivando lote:', await r.text());
   }
 
-  // Registrar alertas
+  // Registrar alertas en 1 sola request
   if (alertas.length > 0) {
     const r = await fetch(
       `${supabaseUrl}/rest/v1/delivery_alerts`,
@@ -151,116 +142,86 @@ async function detectarBajas(chassisEnCSV, supabaseUrl, serviceKey) {
   }
 
   console.log(`[bajas] Resumen — archivados: ${aArchivar.length}, alertas: ${alertas.length}`);
-  return {
-    archivados:     aArchivar.length,
-    alertas_nuevas: alertas.length,
-    alertas,
-  };
+  return { archivados: aArchivar.length, alertas_nuevas: alertas.length, alertas };
 }
 
 async function verificarEntregadosEnCSV(chassisEnCSV, supabaseUrl, serviceKey) {
   console.log('[alertas] Verificando entregados que siguen en CSV...');
 
   const setCSV = new Set(chassisEnCSV);
+  const hoy    = new Date().toISOString().slice(0, 10);
 
-  // Obtener vehículos con estado entregado activo
+  // 1 query — todas las asignaciones entregadas activas con datos del vehículo
   const res = await fetch(
     `${supabaseUrl}/rest/v1/sector_assignments` +
     `?activo=eq.true&estado_trabajo=eq.entregado` +
-    `&select=vehicle_id,entregado_at`,
-    {
-      headers: {
-        'apikey':        serviceKey,
-        'Authorization': `Bearer ${serviceKey}`,
-      },
-    }
+    `&select=vehicle_id,vehicles(id,chasis,interno,modelo)`,
+    { headers: { 'apikey': serviceKey, 'Authorization': `Bearer ${serviceKey}` } }
   );
 
   if (!res.ok) {
-    console.error('[alertas] Error obteniendo entregados:', await res.text());
+    console.error('[alertas] Error:', await res.text());
     return { alertas: [] };
   }
 
   const entregados = await res.json();
-  console.log(`[alertas] Asignaciones con estado entregado: ${entregados.length}`);
+  console.log(`[alertas] Asignaciones entregadas activas: ${entregados.length}`);
 
-  const alertas = [];
+  // Filtrar los que siguen en el CSV
+  const aSinRemito = entregados.filter(row => {
+    const v = row.vehicles;
+    return v && setCSV.has(v.chasis);
+  });
 
-  for (const row of entregados) {
-    // Obtener datos del vehículo
-    const resV = await fetch(
-      `${supabaseUrl}/rest/v1/vehicles?id=eq.${row.vehicle_id}&select=id,chasis,interno,modelo`,
+  console.log(`[alertas] Entregados que siguen en CSV: ${aSinRemito.length}`);
+
+  if (!aSinRemito.length) return { alertas: [] };
+
+  // 1 query — alertas remito_pendiente activas de hoy para estos vehículos
+  const vehicleIds = aSinRemito.map(r => r.vehicles.id).join(',');
+  const resCheck   = await fetch(
+    `${supabaseUrl}/rest/v1/delivery_alerts` +
+    `?vehicle_id=in.(${vehicleIds})` +
+    `&tipo=eq.remito_pendiente` +
+    `&estado=eq.activa` +
+    `&created_at=gte.${hoy}T00:00:00Z` +
+    `&select=vehicle_id`,
+    { headers: { 'apikey': serviceKey, 'Authorization': `Bearer ${serviceKey}` } }
+  );
+
+  const existentes   = resCheck.ok ? await resCheck.json() : [];
+  const yaExiste     = new Set(existentes.map(a => a.vehicle_id));
+
+  // Solo registrar las que no existen hoy
+  const nuevasAlertas = aSinRemito
+    .filter(row => !yaExiste.has(row.vehicles.id))
+    .map(row => ({
+      vehicle_id: row.vehicles.id,
+      tipo:       'remito_pendiente',
+      detalle:    `INT ${row.vehicles.interno} — ${row.vehicles.modelo} marcado como entregado pero sigue en el stock del DMS. Verificar emisión del remito.`,
+    }));
+
+  console.log(`[alertas] Nuevas alertas remito a registrar: ${nuevasAlertas.length}`);
+
+  if (nuevasAlertas.length > 0) {
+    const r = await fetch(
+      `${supabaseUrl}/rest/v1/delivery_alerts`,
       {
+        method:  'POST',
         headers: {
           'apikey':        serviceKey,
           'Authorization': `Bearer ${serviceKey}`,
+          'Content-Type':  'application/json',
+          'Prefer':        'return=minimal',
         },
+        body: JSON.stringify(nuevasAlertas),
       }
     );
-
-    if (!resV.ok) continue;
-    const vArr = await resV.json();
-    const v    = vArr[0];
-    if (!v) continue;
-
-    console.log(`[alertas] Verificando INT ${v.interno} — chasis: ${v.chasis} — en CSV: ${setCSV.has(v.chasis)}`);
-
-    if (setCSV.has(v.chasis)) {
-      // Entregado pero sigue en el CSV → remito pendiente
-      // Verificar si ya existe alerta activa hoy
-      const hoy      = new Date().toISOString().slice(0, 10);
-      const resCheck = await fetch(
-        `${supabaseUrl}/rest/v1/delivery_alerts` +
-        `?vehicle_id=eq.${v.id}` +
-        `&tipo=eq.remito_pendiente` +
-        `&estado=eq.activa` +
-        `&created_at=gte.${hoy}T00:00:00Z` +
-        `&select=id`,
-        {
-          headers: {
-            'apikey':        serviceKey,
-            'Authorization': `Bearer ${serviceKey}`,
-          },
-        }
-      );
-
-      const existing = resCheck.ok ? await resCheck.json() : [];
-
-      if (existing.length === 0) {
-        const alerta = {
-          vehicle_id: v.id,
-          tipo:       'remito_pendiente',
-          detalle:    `INT ${v.interno} — ${v.modelo} marcado como entregado pero sigue en el stock del DMS. Verificar emisión del remito.`,
-        };
-
-        const rPost = await fetch(
-          `${supabaseUrl}/rest/v1/delivery_alerts`,
-          {
-            method:  'POST',
-            headers: {
-              'apikey':        serviceKey,
-              'Authorization': `Bearer ${serviceKey}`,
-              'Content-Type':  'application/json',
-              'Prefer':        'return=minimal',
-            },
-            body: JSON.stringify(alerta),
-          }
-        );
-
-        if (!rPost.ok) {
-          console.error('[alertas] Error registrando alerta remito:', await rPost.text());
-        } else {
-          alertas.push(alerta);
-          console.log(`[alertas] → remito_pendiente registrado: INT ${v.interno}`);
-        }
-      } else {
-        console.log(`[alertas] → remito_pendiente ya existe para INT ${v.interno}`);
-      }
-    }
+    if (!r.ok) console.error('[alertas] Error registrando:', await r.text());
+    else console.log(`[alertas] Registradas: ${nuevasAlertas.length}`);
   }
 
-  console.log(`[alertas] Alertas remito generadas: ${alertas.length}`);
-  return { alertas };
+  return { alertas: nuevasAlertas };
 }
 
 export async function handleUpload(request, env) {
