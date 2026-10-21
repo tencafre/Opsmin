@@ -11,6 +11,7 @@ async function hashBuffer(buffer) {
 }
 
 async function upsertVehicles(vehicles, supabaseUrl, serviceKey) {
+  // NO incluir estado en el upsert — no queremos reactivar archivados
   const clean = vehicles.map(v => ({
     chasis:      v.chasis,
     interno:     v.interno     ?? null,
@@ -22,7 +23,7 @@ async function upsertVehicles(vehicles, supabaseUrl, serviceKey) {
     vendedor:    v.vendedor    ?? null,
     dias_stock:  v.dias_stock  ?? 0,
     ubicacion:   v.ubicacion   ?? null,
-    estado:      'activo',
+    // estado NO va aquí
   }));
 
   const BATCH = 20;
@@ -276,18 +277,24 @@ export async function handleUpload(request, env) {
       );
     }
 
-    // Cargar índice
-    const index = await buildVehicleIndex(
-      env.SUPABASE_URL,
-      env.SUPABASE_SERVICE_ROLE_KEY
-    );
+    const chassisEnCSV = vehicles.map(v => v.chasis);
 
-    // Clasificar nuevos vs existentes
-    const nuevos    = [];
-    const sinMatch  = [];
+    // 1. Detectar bajas ANTES del upsert
+    const [bajasRes, alertasEntregaRes] = await Promise.all([
+      detectarBajas(chassisEnCSV, env.SUPABASE_URL, env.SUPABASE_SERVICE_ROLE_KEY),
+      verificarEntregadosEnCSV(chassisEnCSV, env.SUPABASE_URL, env.SUPABASE_SERVICE_ROLE_KEY),
+    ]);
+
+    // 2. Upsert de vehículos del CSV (sin tocar estado)
+    await upsertVehicles(vehicles, env.SUPABASE_URL, env.SUPABASE_SERVICE_ROLE_KEY);
+
+    // 3. Clasificar nuevos vs existentes para el resumen
+    const index    = await buildVehicleIndex(env.SUPABASE_URL, env.SUPABASE_SERVICE_ROLE_KEY);
+    const nuevos   = [];
+    const sinMatch = [];
 
     for (const v of vehicles) {
-      const sufijo8          = v.chasis.slice(-8);
+      const sufijo8             = v.chasis.slice(-8);
       const { vehicle, metodo } = resolver(sufijo8, v.interno, index);
       if (!vehicle || metodo === 'sin_match') {
         nuevos.push(v);
@@ -300,28 +307,18 @@ export async function handleUpload(request, env) {
       }
     }
 
-    // Upsert de todos los vehículos del CSV
-    await upsertVehicles(vehicles, env.SUPABASE_URL, env.SUPABASE_SERVICE_ROLE_KEY);
-
-    // Detectar bajas — vehículos que desaparecieron del CSV
-    const chassisEnCSV = vehicles.map(v => v.chasis);
-    const [bajasRes, alertasEntregaRes] = await Promise.all([
-      detectarBajas(chassisEnCSV, env.SUPABASE_URL, env.SUPABASE_SERVICE_ROLE_KEY),
-      verificarEntregadosEnCSV(chassisEnCSV, env.SUPABASE_URL, env.SUPABASE_SERVICE_ROLE_KEY),
-    ]);
-
     return Response.json({
-      ok:                  true,
-      archivo_hash:        fileHash,
-      total_filas:         total,
-      vehiculos_validos:   vehicles.length,
-      filas_ignoradas:     skipped.length,
-      vehiculos_nuevos:    nuevos.length,
-      actualizados:        vehicles.length - nuevos.length,
-      archivados:          bajasRes.archivados,
-      alertas_baja:        bajasRes.alertas_nuevas,
-      alertas_remito:      alertasEntregaRes.alertas.length,
-      advertencias:        sinMatch,
+      ok:                true,
+      archivo_hash:      fileHash,
+      total_filas:       total,
+      vehiculos_validos: vehicles.length,
+      filas_ignoradas:   skipped.length,
+      vehiculos_nuevos:  nuevos.length,
+      actualizados:      vehicles.length - nuevos.length,
+      archivados:        bajasRes.archivados,
+      alertas_baja:      bajasRes.alertas_nuevas,
+      alertas_remito:    alertasEntregaRes.alertas.length,
+      advertencias:      sinMatch,
     }, { headers });
 
   } catch (err) {
