@@ -185,7 +185,6 @@ async function verificarEntregadosEnCSV(chassisEnCSV, supabaseUrl, serviceKey) {
     `?vehicle_id=in.(${vehicleIds})` +
     `&tipo=eq.remito_pendiente` +
     `&estado=eq.activa` +
-    `&created_at=gte.${hoy}T00:00:00Z` +
     `&select=vehicle_id`,
     { headers: { 'apikey': serviceKey, 'Authorization': `Bearer ${serviceKey}` } }
   );
